@@ -1,0 +1,44 @@
+# Docker 构建上下文排除清单。
+#
+# 不加这个文件的话，`COPY . /app/mewcode` 会把这些一起打进镜像：
+#   · .mewcode/sessions/          —— 你的历史会话（真实对话内容！）
+#   · .mewcode/session/tool-results/ —— 工具输出落盘（可能含代码/日志）
+#   · .mewcode/file-history/      —— 文件快照备份
+#   · .eval-tmp/ .pytest-tmp/     —— 测试临时目录
+#   · .revert-backup/             —— 撤销备份
+#   · artifacts/                  —— agent 产物
+# 既有**隐私问题**（把会话内容烘进镜像），也有体积问题。
+
+# ── 版本控制与本地状态 ──────────────────────────────
+.git
+.gitignore
+.mewcode/
+.eval-tmp/
+.pytest-tmp/
+.revert-backup/
+artifacts/
+pytest-cache-files-*
+
+# ── Python 缓存与虚拟环境 ───────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 测试与工具缓存 ─────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── 文档与演示（运行时不需要）───────────────────────
+docs/
+*.md
+!MEWCODE.md
+
+# ── 本地配置（凭据绝不能进镜像）─────────────────────
+*.local.yaml
+.env
+.env.*

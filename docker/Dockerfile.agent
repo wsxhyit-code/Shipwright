@@ -1,0 +1,105 @@
+# Agent 运行镜像。
+#
+# 设计要点：
+#   1. 镜像里**不装 docker**（客户端和 socket 都不给）—— 这是最关键的一条，
+#      挂了 docker.sock 等于把宿主 root 交出去。
+#   2. 用非 root 用户跑 —— 容器内也不给 root。
+#   3. 基础测试依赖预装（很少变），项目依赖留给 agent 每次装（会随代码变）。
+#   4. 只暴露 /work（代码）和 /artifacts（补丁出口）两个挂载点。
+
+FROM python:3.12-slim
+
+# Debian 软件源可换。默认用官方源；如果所在网络到 deb.debian.org 不通
+# （实测在某些网络下只有 800B/s 然后 404），换成可达的镜像：
+#
+#     docker build -f docker/Dockerfile.agent -t mewcode-agent \
+#         --build-arg DEBIAN_MIRROR=mirrors.aliyun.com .
+#
+# 换成国内镜像只影响**构建期**装包；运行期容器是禁出网的（compose 里
+# test-net 标了 internal: true），所以不会因为镜像源引入任何运行时依赖。
+ARG DEBIAN_MIRROR=deb.debian.org
+ARG DEBIAN_SECURITY_MIRROR=deb.debian.org
+
+# 构建期代理。**默认是"不要代理"**，这是刻意的。
+#
+# Docker Desktop 会自动把宿主机的系统代理注入构建容器（例如 Clash 的
+# `http://127.0.0.1:7890`）。但容器里的 `127.0.0.1` 是**容器自己**，
+# 不是宿主机 —— 那个地址永远连不上，于是 apt / pip 报出这样的错：
+#
+#     500 ... connecting to 127.0.0.1:7890: dial tcp 127.0.0.1:7890:
+#     No connection could be made because the target machine actively refused it
+#
+# 这个报错很容易被误读成"镜像源挂了"或"网络不通"，实际是代理地址在容器里无意义。
+# 所以这里默认把注入的代理清掉，让构建直连。
+#
+# 如果你的网络确实需要代理才能出网，要用**容器能访问到的**地址，
+# 也就是 host.docker.internal（不是 127.0.0.1）：
+#
+#     docker build -f docker/Dockerfile.agent -t mewcode-agent \
+#         --build-arg APT_HTTP_PROXY=http://host.docker.internal:7890 .
+ARG APT_HTTP_PROXY=
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# 改代码 + 跑测试所需的最小工具集。
+# 刻意**不装** docker / ssh / 任何云 CLI。
+#
+# 用 sed 改写而不是 COPY 一份 sources.list：基础镜像换了 Debian 版本
+# （bookworm → trixie）时不用跟着改文件。`|| true` 是刻意的 ——
+# 如果基础镜像的源格式变了，sed 不匹配也不该让构建挂掉，
+# 后面的 apt-get update 会给出真正的错误。
+RUN set -eux; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        if [ -f "$f" ]; then \
+            sed -i \
+                -e "s|deb.debian.org|${DEBIAN_MIRROR}|g" \
+                -e "s|security.debian.org|${DEBIAN_SECURITY_MIRROR}|g" \
+                "$f" || true; \
+        fi; \
+    done; \
+    if [ -n "${APT_HTTP_PROXY}" ]; then \
+        export http_proxy="${APT_HTTP_PROXY}" https_proxy="${APT_HTTP_PROXY}"; \
+    else \
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; \
+    fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        git \
+        ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+
+# 基础测试依赖：预装进镜像。项目自己的依赖由 agent 用 pip install 装。
+RUN set -eux; \
+    if [ -n "${APT_HTTP_PROXY}" ]; then \
+        export http_proxy="${APT_HTTP_PROXY}" https_proxy="${APT_HTTP_PROXY}"; \
+    else \
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; \
+    fi; \
+    pip install \
+        pytest \
+        pytest-cov \
+        ruff
+
+# 代码放进 /app/mewcode，PYTHONPATH 指向 /app —— 和"仓库根即包根"的
+# 扁平布局一致：宿主上也是把包的**父目录**放进 sys.path。
+#
+# ⚠️ 因此镜像内目录必须叫 mewcode：`python -m mewcode` 靠的是
+#    /app 在 sys.path 上 + 包目录名是 mewcode。
+COPY . /app/mewcode
+ENV PYTHONPATH=/app
+
+# 非 root 运行
+RUN useradd -m -u 10001 -s /bin/bash agent
+
+# 代码目录与补丁出口。两者都由 run-agent.sh 挂载进来。
+RUN mkdir -p /work /artifacts && chown -R agent:agent /work /artifacts
+VOLUME ["/work", "/artifacts"]
+
+USER agent
+WORKDIR /work
+
+# 入口只跑 agent 本体，不含任何 shell 包装
+ENTRYPOINT ["python", "-m", "mewcode"]
+CMD ["--help"]

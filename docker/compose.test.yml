@@ -1,0 +1,62 @@
+# 测试环境：agent 需要的依赖服务，由**平台**预先起好。
+#
+# 为什么不让 agent 自己起？
+#   起容器需要 docker 权限，而给了 docker 就等于把宿主 root 交出去
+#   （`docker run --privileged -v /:/host`）。所以边界是：
+#
+#       平台造环境，agent 用环境
+#
+# agent 容器加入同一个网络，通过环境变量拿到连接串，
+# 它能「连」但不能「起」。
+
+name: mewcode-agent-env
+
+services:
+  # 数据库：按你的项目换镜像
+  db:
+    image: postgres:16-alpine
+    # ⚠️ 每个服务都必须显式加入 test-net。不写的话 compose 会把这些服务
+    #    放到自动创建的 `<项目名>_default` 网络上 —— 那个网络**不是 internal 的**，
+    #    于是铁律③「默认禁出网」完全失效（实测：容器能直连 1.1.1.1:443）。
+    #    这个坑踩过：文件里明明写了 internal: true，但那是个没人用的网络。
+    networks: [test-net]
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: testdb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d testdb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # 缓存
+  redis:
+    image: redis:7-alpine
+    networks: [test-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # 第三方依赖的 mock（按需替换成你自己的 mock 服务）
+  mock-http:
+    image: hashicorp/http-echo:1.0
+    networks: [test-net]
+    command: ["-text=ok", "-listen=:8080"]
+
+networks:
+  # 私有网络：agent 容器必须显式加入才能连上这些服务
+  test-net:
+    driver: bridge
+    # ★ 关键：禁止容器访问外部网络。
+    #   这样即使 agent 被提示注入，也无法把代码发出去。
+    #   需要装 pip 包时用 --allow-external 临时放行（见 run-agent.sh）。
+    internal: true
+
+# 刻意不暴露宿主机端口：agent 只能用服务名（db / redis）在内网互访，
+# 宿主上的其他程序碰不到这个网络。
+#
+# 网络全名是 `<项目名>_<网络名>` = `mewcode-agent-env_test-net`，
+# 和 run-agent.sh 里 `MEWCODE_NET` 的默认值一致。

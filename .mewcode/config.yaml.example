@@ -1,0 +1,70 @@
+# 复制成 .mewcode/config.yaml 后填上你自己的值。
+#
+# ⚠️ `config.yaml` 已在 .gitignore 里 —— **不要把填好的那份提交上去**。
+#    填好之后如果已经 commit 过，光删文件不够：git 历史里还在，
+#    唯一的补救是去 provider 后台把这个 key 作废重发。
+
+providers:
+  # 每个 provider 的名字随便起，用来在日志里区分。
+  - name: anthropic-official
+    protocol: anthropic                    # anthropic / openai / openai-compat
+    base_url: https://api.anthropic.com
+    # 也可以用环境变量：api_key: "${ANTHROPIC_API_KEY}"
+    # （config.py 的 resolve_env_vars 会展开 ${VAR}）
+    api_key: "${ANTHROPIC_API_KEY}"
+    model: claude-sonnet-4-5
+    thinking: false                        # 是否开启 extended thinking
+
+  # 国内可用、便宜得多的替代（本次开发用的就是这条链路）：
+  # - name: deepseek
+  #   protocol: anthropic                  # DeepSeek 提供了 Anthropic 兼容端点
+  #   base_url: https://api.deepseek.com/anthropic
+  #   api_key: "${DEEPSEEK_API_KEY}"
+  #   model: deepseek-v4-pro
+  #   thinking: true
+
+# 权限模式：default / acceptEdits / plan / bypassPermissions / custom / dontAsk
+permission_mode: default
+
+# MCP server。category 决定权限语义：
+#   read    → DEFAULT 模式下 allow，且允许并发（只读工具不会互相干扰）
+#   write   → ask
+#   command → ask（默认，最保守）
+mcp_servers:
+  - name: context7
+    command: npx
+    args: ["-y", "@upstash/context7-mcp"]
+    category: read
+
+# ---------------------------------------------------------------------------
+# toolset —— 把「提 PR」和「运维数据源」接进 agent
+#
+# ⚠️ 不写这一段的话，内置只有 6 个工具（ReadFile / WriteFile / EditFile /
+#    Bash / Glob / Grep），CreatePR 和运维工具**一个都装不进来**。
+# ---------------------------------------------------------------------------
+# toolset:
+#   create_pr:
+#     enabled: true
+#     verify_command: "python -m pytest tests/ -q"   # 必填；没配会在启动时报错
+#     artifacts_dir: ".mewcode/pr"
+#     base_ref: "main"
+#     require_independent: true                      # 必须配独立验证者，否则拒绝
+#     timeout: 900
+#
+#     # 交付模式 —— agent 自己走到哪一步
+#     mode: patch        # patch（只出补丁）| push（推 agent/* 分支）| pr（再开 PR）
+#     remote: origin
+#     api_base: ""       # 留空 = https://api.github.com；自建实例填 https://<host>/api/v3
+#
+#   ops:
+#     - kind: loki
+#       base_url: "https://loki.internal"
+#       token_env: "LOKI_READONLY_TOKEN"             # 从环境变量读，配置里不落密钥
+#       # 建议用**只读** token：运维动作的裁判延迟很长，回滚/重启错了就是二次故障
+#     - kind: prometheus
+#       base_url: "https://prom.internal"
+#     - kind: alertmanager
+#       base_url: "https://am.internal"
+#       token_env: "AM_TOKEN"
+#     # 部署 / 工单没有通用标准，需要自己写适配器；不接就保持不写
+#     # （调用时会明确报「未接入」，而不是静默返回空）

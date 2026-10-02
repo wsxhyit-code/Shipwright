@@ -1,0 +1,29 @@
+# 行尾统一成 LF。
+#
+# 这不是洁癖，是**会让东西直接坏掉**的一件事：
+#
+#   · docker/*.sh 会被 Linux 容器里的 /bin/sh 执行。如果 checkout 成 CRLF，
+#     shebang 行末尾多一个 \r，容器里报 `/bin/sh^M: bad interpreter`。
+#   · ci/agent-pipeline.yml 在 GitHub Actions 的 Linux runner 上跑。
+#
+# 而 Windows 上 Git for Windows 默认会把文本文件转成 CRLF（安装时选的
+# autocrlf），所以这里显式钉死覆盖它。
+#
+# `text=auto` 让 git 自己判断哪些是文本（会跳过二进制），`eol=lf` 保证
+# **仓库里和检出后都是 LF**。
+* text=auto eol=lf
+
+# 二进制：不要做任何行尾或编码转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.whl binary
+*.pyc binary
+*.so binary
+*.dll binary
+*.exe binary

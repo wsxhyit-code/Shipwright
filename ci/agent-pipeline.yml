@@ -1,0 +1,108 @@
+# 完整流水线：确定性外壳 + AI 内核。
+#
+# 注意整个流程里 AI 只占 **一步**（step 3）。
+# 其余全是机械操作，不需要也不应该让 LLM 参与。
+
+name: agent-task
+
+on:
+  issues:
+    types: [labeled]          # 打上 agent 标签即触发
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 任务描述
+        required: true
+
+permissions:
+  contents: write             # 推分支
+  pull-requests: write        # 开 PR
+
+jobs:
+  agent:
+    if: github.event.label.name == 'agent' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ── 准备（确定性）──────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: 起测试环境（平台侧，agent 不参与）
+        run: docker compose -f docker/compose.test.yml up -d --wait
+
+      - name: 构建 agent 镜像
+        run: docker build -f docker/Dockerfile.agent -t mewcode-agent:ci .
+
+      # ── ★ AI 内核：唯一需要 LLM 的一步 ──────────────────────
+      - name: 运行 agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p "$PWD/artifacts"
+          docker run --rm \
+            --network mewcode-agent-env_test-net \
+            -v "$PWD:/work:rw" \
+            -v "$PWD/artifacts:/artifacts:rw" \
+            -e DATABASE_URL="postgresql://app:app@db:5432/testdb" \
+            -e REDIS_URL="redis://redis:6379" \
+            -e API_KEY \
+            -w /work \
+            mewcode-agent \
+            -p "${{ github.event.issue.title }} ${{ github.event.issue.body }}"
+
+      - name: 上传 agent 产物（无论成败都传，便于排查）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-artifacts
+          path: artifacts/
+          if-no-files-found: warn
+
+      # ── 收尾（确定性，无 AI）────────────────────────────────
+      # 注意：这里**在宿主 runner 上**重新 apply + 重跑验证，
+      # 不用信 agent 自己跑的那次。
+      - name: 应用补丁并独立重跑验证
+        run: |
+          python ci/apply_and_open_pr.py \
+            --repo . \
+            --artifacts artifacts \
+            --verify-cmd "python -m pytest tests/ -q" \
+            --base main \
+            --dry-run
+        # CI 环境里依赖要额外装，按你的项目改：
+        #   - run: pip install -r requirements.txt
+        #     if: steps.agent.outputs.has_patch == 'true'
+
+      - name: 推送并开 PR
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python ci/apply_and_open_pr.py \
+            --repo . \
+            --artifacts artifacts \
+            --verify-cmd "python -m pytest tests/ -q" \
+            --base main
+
+      - name: 失败时把报告贴回 issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '流水线失败，未创建 PR。';
+            try { body = fs.readFileSync('artifacts/FAILURE.md', 'utf8'); } catch (e) {}
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: 清理环境（总是执行）
+        if: always()
+        run: docker compose -f docker/compose.test.yml down -v
