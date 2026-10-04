@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# 这次「告警 → 定位 → 提 PR」实验用的配置。
+#
+# 刻意只留两段：provider 和 toolset。
+# 不放 hooks —— 应用自己的权限/护栏配置属于应用，不属于评测夹具。
+# （hook 那三条绕过路径的验证见 .mewcode/config.local.yaml 与 docs/devops-agent/README.md）
+#
+# 场景数据不在配置里：配置只声明「接了一个 ops 后端」，具体是内置 mock 场景
+# 还是 account-api 真实故障场景，由 run_triage.py 在装配时注入 ——
+# 所以产线配置不会被评测夹具污染。
+# ---------------------------------------------------------------------------
+providers:
+  - name: deepseek-anthropic
+    protocol: anthropic
+    base_url: https://api.deepseek.com/anthropic
+    api_key: "sk-7e0e62b5785c4326bd530c40fa1ec9dd"
+    model: deepseek-v4-pro
+    thinking: true
+
+toolset:
+  create_pr:
+    enabled: true
+    # 必填项：没有它 CreatePR 就等于拆掉了门禁，配置校验会直接拒绝
+    verify_command: '"D:\.venv\Scripts\python.exe" -m pytest -q'
+    artifacts_dir: ".mewcode/pr"
+    base_ref: "main"
+    # 必须配独立验证者（装配时自动接上），否则拒绝启动 ——
+    # 避免「忘了接独立验证」却以为接上了
+    require_independent: true
+    timeout: 900
+    # 只产出补丁，不推送。这是一台本地机器，没有 git 远端凭据，
+    # 而且这一步正好是本次要验证的边界
+    mode: patch
+    remote: origin
+
+  ops:
+    # 数据源由 run_triage.py 注入；这里只是告诉装配层「要装运维工具」
+    - kind: mock
+      capability: mock

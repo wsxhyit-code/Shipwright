@@ -68,3 +68,78 @@ mcp_servers:
 #       token_env: "AM_TOKEN"
 #     # 部署 / 工单没有通用标准，需要自己写适配器；不接就保持不写
 #     # （调用时会明确报「未接入」，而不是静默返回空）
+#
+#   # --- 企业知识库：内部规范 / SOP / 架构说明 ---------------------------------
+#   #
+#   # 没有它，agent 只能凭**通用最佳实践**写代码 —— 而通用最佳实践和内部规范
+#   # 经常是冲突的，它自己察觉不到。配了之后它动手前会先查一次。
+#   knowledge:
+#     kind: local                # local（扫本地 markdown，开箱可用）| http | mock
+#     extra_dirs: ["docs/standards", "docs/adr"]
+#     include_user_dir: true     # 同时扫 ~/.mewcode/knowledge/
+#
+#     # 文档放在 <工作目录>/.mewcode/knowledge/**/*.md（目录约定同 skills/agents）。
+#     # 标题取一级标题，标签写一行 `tags: 规范, 数据库`。
+#     #
+#     # 接内部检索 API 时改成：
+#     # kind: http
+#     # base_url: "https://kb.internal/api"
+#     # path: "/search"
+#     # query_param: "q"
+#     # token_env: "KB_READONLY_TOKEN"
+#     # read_path: "/docs/{id}"    # 不配就只能检索、读不了全文
+#     # mapping:                   # 响应形状和默认不一样时映射一下
+#     #   response_path: "hits.hits"
+#     #   id_field: "_id"
+#     #   title_field: "_source.title"
+#
+#   # --- 代码规范校验：把「符合内部标准」变成硬关卡 -----------------------------
+#   #
+#   # 光往 system prompt 里塞规范是**软约束**（模型可能没读、读漏、写完就忘）。
+#   # 这里把规范做成**可执行的检查命令**：退出码非 0 就拒绝交付。
+#   # 它排在所有验证之前 —— 通常就是 lint/grep，最便宜。
+#   #
+#   # create_pr:
+#   #   standards:
+#   #     - name: no-print-in-business-code
+#   #       command: 'grep -rn "print(" src/ && exit 1 || exit 0'
+#   #       hint: 业务代码用 logging，不要用 print
+#   #     - name: ruff-lint
+#   #       command: "ruff check ."
+#   #     # 也可以只写一个字符串（名字和命令都用它）
+#   #     # - "python -m mypy src/"
+#
+#   # --- 环境管理：让 agent 自己能起测试环境 ------------------------------------
+#   #
+#   # 方向二要「agent 自己起测试环境验证」。但**不能给它 docker 权限** ——
+#   # 给了就等于挂 docker.sock，等于交出宿主 root（业界最常见的沙箱穿透）。
+#   #
+#   # 折中方案：agent 能起环境，但**只能执行平台给定的那几条命令**。
+#   # stop / reset 是破坏性动作，各自有开关，默认关。
+#   #
+#   # environment:
+#   #   start:  "bash /app/scripts/up-test-env.sh"
+#   #   status: "bash /app/scripts/env-status.sh"
+#   #   # stop:  "bash /app/scripts/down-test-env.sh"
+#   #   # reset: "bash /app/scripts/reset-test-db.sh"
+#   #   allow_stop: false      # 默认关；打开会停掉环境
+#   #   allow_reset: false     # 默认关；打开会重置数据（可能影响别人）
+#   #   timeout: 600
+#   #   settle_seconds: 5      # 起完等一会儿再认为 ready
+#
+#   # --- 插件：第三方装包即接入私有工具 -----------------------------------------
+#   #
+#   # 打开后，任何声明了 `mewcode.tools` entry point 的已安装包都会自动注册工具：
+#   #
+#   #   # 第三方包的 pyproject.toml
+#   #   [project.entry-points."mewcode.tools"]
+#   #   acme = "acme_mewcode:register"
+#   #
+#   #   # acme_mewcode/__init__.py
+#   #   def register(registry):
+#   #       registry.register(QueryAcmeOrders())
+#   #       return ["QueryAcmeOrders"]
+#   #
+#   # 坏插件不会拖垮 agent（记为失败并继续），但**一定会出现在能力清单里** ——
+#   # 「悄悄少了一批工具」是最坏的结果。
+#   plugins: false

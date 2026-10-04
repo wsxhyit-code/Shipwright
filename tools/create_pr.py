@@ -162,6 +162,7 @@ class CreatePRTool(Tool):
         mode: str = "patch",
         remote: str = "origin",
         api_base: str = "",
+        standards: list[dict] | None = None,
     ) -> None:
         self._work_dir = str(Path(work_dir).resolve())
         self._verify_command = verify_command
@@ -183,6 +184,16 @@ class CreatePRTool(Tool):
         self._mode = mode
         self._remote = remote
         self._api_base = api_base
+        #: 规范校验关卡：[{name, command, hint}]，**每条退出码都必须为 0**。
+        #:
+        #: 为什么要有这一层：方向二要求「agent 写出来的代码天然符合内部标准」。
+        #: 光靠往 system prompt 里塞规范是**软约束** —— 模型可能没读、读漏、
+        #: 或者读懂了但写完就忘。所以把内部规范做成**可执行的检查命令**，
+        #: 让它和「测试是否通过」一样变成硬关卡：不过就不交付。
+        #:
+        #: 顺序上它排在**所有验证之前**（最便宜：通常就是 lint / grep），
+        #: 这样违反规范时能立刻被打回，不浪费一次昂贵的独立验证。
+        self._standards = list(standards or [])
         #: 最近一次交付的结果，供测试与上层读取
         self.last_delivery: dict[str, str] = {}
 
@@ -218,12 +229,61 @@ class CreatePRTool(Tool):
 
     # -- 主流程 ----------------------------------------------------------
 
+    def _run_standards(self) -> str | None:
+        """跑规范校验关卡。全部通过返回 None；有失败返回给模型看的说明。
+
+        **fail-closed**：只要有一条命令退出码非 0 就拒绝交付。
+        和「解析不到 VERDICT 就按 FAIL」是同一个原则 ——
+        拿不准的时候站在"不交付"这一边。
+        """
+        failures: list[tuple[str, str, str, str]] = []   # (name, command, hint, output)
+        for spec in self._standards:
+            name = spec.get("name", "?")
+            command = spec.get("command", "")
+            hint = spec.get("hint", "")
+            if not command:
+                continue
+            argv = _split_command(command)
+            code, out = _run(argv, self._work_dir, self._timeout)
+            if code != 0:
+                failures.append((name, command, hint, out))
+
+        if not failures:
+            return None
+
+        parts = [
+            f"❌ 提 PR 被拒：**规范校验**未通过（{len(failures)}/{len(self._standards)} 条不过）\n",
+            "这一层检查的是**内部编码规范**，不是功能是否正确 —— "
+            "测试可能全过，但代码仍然违反了内部约定。\n",
+        ]
+        for name, command, hint, out in failures:
+            parts.append(f"\n【{name}】")
+            parts.append(f"  命令：{command}")
+            if hint:
+                parts.append(f"  要求：{hint}")
+            tail = out[-_TAIL_CHARS:]
+            parts.append(f"  输出（尾部 {_TAIL_CHARS} 字符）：\n{tail}")
+        parts.append(
+            "\n请按上面的输出修改代码，然后重新调用 CreatePR。\n"
+            "如果这条规范本身已经过时，应当去改规范，而不是绕过它。"
+        )
+        return "\n".join(parts)
+
     async def execute(self, params: BaseModel) -> ToolResult:
         p: CreatePRParams = params  # type: ignore[assignment]
 
         err = self._ensure_repo()
         if err:
             return ToolResult(output=f"提 PR 失败：{err}", is_error=True)
+
+        # ⓪ 规范校验 —— 最便宜的一层（通常就是 lint / grep），排在所有验证之前
+        #
+        # 顺序理由：违反内部规范是**最常见**的打回原因，而且检查成本最低。
+        # 放在最前面能在花掉一次昂贵的独立验证之前就把问题挡回去。
+        if self._standards:
+            failed = self._run_standards()
+            if failed:
+                return ToolResult(output=failed, is_error=True)
 
         # ① 命令验证 —— 最便宜的一层，先跑，快速失败
         result = self._verify()

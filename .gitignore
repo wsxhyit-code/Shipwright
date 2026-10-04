@@ -50,6 +50,23 @@ dist/
 .venv/
 venv/
 env/
+# 本地补齐的运行期依赖（pip install --target）与 pip 临时/缓存目录。
+# 这台机器的全局 site-packages 不可写，所以缺的包装在仓库内的 .deps/ 里，
+# 由 run.ps1 通过 PYTHONPATH 挂上。只是为了让 TUI 跑起来，不进仓库。
+.deps/
+.pipcache/
+.piptmp/
+
+# ---------------------------------------------------------------------------
+# 评测夹具的临时产物
+#
+#  · eval/shipwright-triage/.verify-work/ —— 独立验证时从基线导出的干净副本
+#    （每次重跑都会重建，不需要进仓库）
+#  · run1.log —— 那次「告警 → 定位 → 提 PR」跑下来的完整轨迹
+# ---------------------------------------------------------------------------
+eval/shipwright-triage/.verify-work/
+eval/shipwright-triage/*.log
+eval/**/__pycache__/
 
 # ---------------------------------------------------------------------------
 # 与 Shipwright 无关的杂物（代码里零引用）

@@ -257,6 +257,95 @@ _DEFAULT_OPS_CAPABILITY = {
 
 VALID_CREATE_PR_MODES = {"patch", "push", "pr"}
 
+VALID_KNOWLEDGE_KINDS = {"local", "http", "mock"}
+
+DEFAULT_KNOWLEDGE = {
+    "kind": "local",
+    "extra_dirs": [],
+    "include_user_dir": True,
+    "base_url": "",
+    "path": "/search",
+    "query_param": "q",
+    "limit_param": "limit",
+    "read_path": "",
+    "read_id_field": "content",
+    "token_env": "",
+    "token": "",
+    "timeout": 15.0,
+    "trust_env": False,
+    "mapping": {},
+    "name": "",
+}
+
+DEFAULT_ENVIRONMENT = {
+    "start": "",
+    "stop": "",
+    "status": "",
+    "reset": "",
+    "allow_stop": False,
+    "allow_reset": False,
+    "timeout": 600,
+    "settle_seconds": 0,
+}
+
+
+def validate_environment(raw: object) -> dict | None:
+    """校验 `toolset.environment` —— 平台给定的环境命令。
+
+    缺省返回 None（= 不接，agent 只连环境不起环境）。
+
+    ⚠️ `allow_stop` / `allow_reset` **默认关**。
+    `reset` 尤其危险：它可能清掉别人正在用的数据。
+    所以这两个开关在**代码里**拦（`EnvironmentRunner.run`），
+    不靠提示词劝阻 —— 提示词是可以被绕过的。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("toolset.environment must be a mapping")
+
+    out = dict(DEFAULT_ENVIRONMENT)
+    for key in ("start", "stop", "status", "reset"):
+        if key in raw:
+            v = raw[key]
+            if not isinstance(v, str):
+                raise ConfigError(f"toolset.environment.{key} must be a string")
+            out[key] = v.strip()
+
+    if not any(out[k] for k in ("start", "stop", "status", "reset")):
+        raise ConfigError(
+            "toolset.environment 配了但一条命令都没有。\n"
+            "至少要给 start（起环境）或 status（查状态），否则这一段没有意义 —— "
+            "直接删掉它，或者补上命令，例如：\n"
+            "  environment:\n"
+            "    start: \"bash /app/scripts/up-test-env.sh\""
+        )
+
+    out["allow_stop"] = validate_bool_field(
+        raw.get("allow_stop", False), "toolset.environment.allow_stop"
+    )
+    out["allow_reset"] = validate_bool_field(
+        raw.get("allow_reset", False), "toolset.environment.allow_reset"
+    )
+    for key, floor in (("timeout", 1), ("settle_seconds", 0)):
+        if key in raw:
+            v = raw[key]
+            if not isinstance(v, (int, float)) or v < floor:
+                raise ConfigError(
+                    f"toolset.environment.{key} must be a number >= {floor}"
+                )
+            out[key] = int(v)
+
+    # 开了破坏性开关要能看见 —— 写进日志式的提示里，不是静默接受
+    if out["allow_reset"] and not out["reset"]:
+        raise ConfigError(
+            "toolset.environment.allow_reset 开着，但没配 reset 命令"
+        )
+    if out["allow_stop"] and not out["stop"]:
+        raise ConfigError("toolset.environment.allow_stop 开着，但没配 stop 命令")
+    return out
+
+
 DEFAULT_CREATE_PR = {
     "enabled": False,
     "verify_command": "",
@@ -267,7 +356,120 @@ DEFAULT_CREATE_PR = {
     "mode": "patch",
     "remote": "origin",
     "api_base": "",
+    "standards": [],
 }
+
+
+def validate_knowledge(raw: object) -> dict | None:
+    """校验 `toolset.knowledge`。
+
+    缺省返回 None（= 不接知识库）。这**不是**错误配置，
+    但工具仍然会注册 —— 调用时抛 `KnowledgeUnavailable`，
+    这样模型能明确知道「没接入」，而不是把空结果读成「内部没有规定」。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("toolset.knowledge must be a mapping")
+
+    out = dict(DEFAULT_KNOWLEDGE)
+    out["mapping"] = {}
+
+    kind = raw.get("kind", "local")
+    if kind not in VALID_KNOWLEDGE_KINDS:
+        raise ConfigError(
+            f"toolset.knowledge.kind must be one of: "
+            f"{', '.join(sorted(VALID_KNOWLEDGE_KINDS))}（收到 {kind!r}）"
+        )
+    out["kind"] = kind
+
+    if kind == "http" and not str(raw.get("base_url") or "").strip():
+        raise ConfigError(
+            "toolset.knowledge.kind = 'http' 但没配 base_url。\n"
+            "接内部检索 API 必须给地址，例如：\n"
+            "  base_url: \"https://kb.internal/api\""
+        )
+
+    for key in ("base_url", "path", "query_param", "limit_param",
+                "read_path", "read_id_field", "token_env", "token", "name"):
+        if key in raw:
+            v = raw[key]
+            if not isinstance(v, str):
+                raise ConfigError(f"toolset.knowledge.{key} must be a string")
+            out[key] = v.strip()
+
+    if "extra_dirs" in raw:
+        v = raw["extra_dirs"]
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ConfigError("toolset.knowledge.extra_dirs must be a list of strings")
+        out["extra_dirs"] = [x.strip() for x in v if x.strip()]
+
+    out["include_user_dir"] = validate_bool_field(
+        raw.get("include_user_dir", True), "toolset.knowledge.include_user_dir"
+    )
+    out["trust_env"] = validate_bool_field(
+        raw.get("trust_env", False), "toolset.knowledge.trust_env"
+    )
+
+    if "timeout" in raw:
+        t = raw["timeout"]
+        if not isinstance(t, (int, float)) or t <= 0:
+            raise ConfigError("toolset.knowledge.timeout must be a positive number")
+        out["timeout"] = float(t)
+
+    if "mapping" in raw:
+        m = raw["mapping"]
+        if not isinstance(m, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in m.items()
+        ):
+            raise ConfigError(
+                "toolset.knowledge.mapping must be a mapping of string -> string，"
+                "例如 response_path: 'hits.hits'"
+            )
+        out["mapping"] = dict(m)
+
+    return out
+
+
+def validate_standards(raw: object) -> list[dict]:
+    """校验 `toolset.create_pr.standards` —— 规范校验关卡。
+
+    每条形如 `{name, command, hint}`，`command` 退出码非 0 即不通过。
+    这是把「代码符合内部标准」从提示词软约束变成硬关卡的地方，
+    所以校验从严：名字和命令都不能空。
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("toolset.create_pr.standards must be a list")
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, item in enumerate(raw):
+        label = f"toolset.create_pr.standards[{i}]"
+        if isinstance(item, str):
+            item = {"name": item, "command": item}
+        if not isinstance(item, dict):
+            raise ConfigError(f"{label} must be a mapping（或一个字符串命令）")
+
+        name = item.get("name")
+        command = item.get("command")
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(f"{label}: 缺少 name（用来在报告里区分是哪条检查）")
+        if not isinstance(command, str) or not command.strip():
+            raise ConfigError(f"{label} ({name}): 缺少 command")
+        if name in seen:
+            raise ConfigError(f"{label}: name {name!r} 重复了")
+        seen.add(name)
+
+        hint = item.get("hint", "")
+        if not isinstance(hint, str):
+            raise ConfigError(f"{label} ({name}): hint must be a string")
+
+        out.append({"name": name.strip(), "command": command.strip(), "hint": hint.strip()})
+    return out
 
 
 def validate_ops_backends(raw: object) -> list[dict]:
@@ -357,7 +559,13 @@ def validate_toolset(raw: object) -> dict:
     而它看起来还能正常工作 —— 这种"悄悄降级"比启动失败危险得多。
     """
     if raw is None:
-        return {"ops": [], "create_pr": dict(DEFAULT_CREATE_PR)}
+        return {
+            "ops": [],
+            "create_pr": dict(DEFAULT_CREATE_PR),
+            "knowledge": None,
+            "plugins": False,
+            "environment": None,
+        }
     if not isinstance(raw, dict):
         raise ConfigError("toolset must be a mapping")
 
@@ -401,6 +609,8 @@ def validate_toolset(raw: object) -> dict:
                 raise ConfigError(f"toolset.create_pr.{key} must be a string")
             cp[key] = value.strip()
 
+    cp["standards"] = validate_standards(cp_raw.get("standards"))
+
     # mode=pr 要有办法开 PR：gh 或 token，二者必须有其一。
     # 缺失时**启动就报错** —— 否则 agent 会在改完代码、验证通过、
     # 分支都推上去之后才发现开不了 PR，白跑一整轮。
@@ -424,7 +634,13 @@ def validate_toolset(raw: object) -> dict:
             "请补上 verify_command，例如：verify_command: \"python -m pytest tests/ -q\""
         )
 
-    return {"ops": validate_ops_backends(raw.get("ops")), "create_pr": cp}
+    return {
+        "ops": validate_ops_backends(raw.get("ops")),
+        "create_pr": cp,
+        "knowledge": validate_knowledge(raw.get("knowledge")),
+        "plugins": validate_bool_field(raw.get("plugins", False), "toolset.plugins"),
+        "environment": validate_environment(raw.get("environment")),
+    }
 
 
 def validate_config_structure(raw: object) -> dict:

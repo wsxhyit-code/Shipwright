@@ -164,19 +164,65 @@ class CreatePRConfig:
     mode: str = "patch"
     remote: str = "origin"
     api_base: str = ""
+    #: 规范校验关卡：**多条**命名检查，全部必须通过才允许交付。
+    #: 形状：[{name, command, hint}]。这是把「写出的代码符合内部标准」
+    #: 从「提示词里的软约束」升级成「可执行、会失败、fail-closed 的硬关卡」。
+    standards: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class KnowledgeConfig:
+    """企业知识库（内部规范 / SOP / 架构说明）的配置。
+
+    种三 `kind`：
+
+        local  —— 扫本地 markdown（开箱可用，不需要任何外部系统）
+        http   —— 接内部检索 / Wiki API（字段可映射，见 HttpKnowledgeBackend）
+        mock   —— 内存演示数据（跑通流程用）
+
+    **只支持一个知识库源。** 检索是「一个入口返回一批结果」的语义，
+    多个来源应该在检索服务那一层做联邦，而不是让 agent 面对三个
+    SearchKnowledge。要覆盖多个本地目录用 `extra_dirs`。
+    """
+
+    kind: str = "local"
+    # --- local ---
+    extra_dirs: list[str] = field(default_factory=list)
+    include_user_dir: bool = True
+    # --- http ---
+    base_url: str = ""
+    path: str = "/search"
+    query_param: str = "q"
+    limit_param: str = "limit"
+    read_path: str = ""
+    read_id_field: str = "content"
+    token_env: str = ""
+    token: str = ""
+    timeout: float = 15.0
+    trust_env: bool = False
+    mapping: dict[str, str] = field(default_factory=dict)
+    name: str = ""
 
 
 @dataclass
 class ToolsetConfig:
-    """把运维后端和 CreatePR 接进运行中的 agent。
+    """把运维后端、知识库和 CreatePR 接进运行中的 agent。
 
-    没有这一段的话，`tools/ops/` 和 `tools/create_pr.py` 就只是"能通过测试的
-    代码"，而不是 agent 真的有的能力 —— 它们不会出现在任何一次运行的
-    registry 里。
+    没有这一段的话，`tools/ops/`、`tools/knowledge/` 和
+    `tools/create_pr.py` 就只是"能通过测试的代码"，而不是 agent 真的有的
+    能力 —— 它们不会出现在任何一次运行的 registry 里。
     """
 
     ops: list[OpsBackendConfig] = field(default_factory=list)
     create_pr: CreatePRConfig = field(default_factory=CreatePRConfig)
+    knowledge: KnowledgeConfig | None = None
+    #: 是否加载第三方插件（`mewcode.tools` entry point 组）。
+    #: 打开后，任何 `pip install` 进来的、声明了那个组的包都会自动注册工具 ——
+    #: 这是「私有工具链装包即接入、不用改核心」的入口。
+    plugins: bool = False
+    #: 环境管理：平台给定的「起/停/重置测试环境」命令。
+    #: None = 不接（依赖服务由平台预先起好，agent 只连不起）。
+    environment: dict | None = None
 
 
 @dataclass
@@ -259,7 +305,33 @@ def _load_single_file(path: Path) -> AppConfig:
             mode=cp["mode"],
             remote=cp["remote"],
             api_base=cp["api_base"],
+            standards=cp["standards"],
         ),
+        knowledge=(
+            KnowledgeConfig(
+                kind=k["kind"],
+                extra_dirs=k["extra_dirs"],
+                include_user_dir=k["include_user_dir"],
+                base_url=k["base_url"],
+                path=k["path"],
+                query_param=k["query_param"],
+                limit_param=k["limit_param"],
+                read_path=k["read_path"],
+                read_id_field=k["read_id_field"],
+                token_env=k["token_env"],
+                token=k["token"],
+                timeout=k["timeout"],
+                trust_env=k["trust_env"],
+                mapping=k["mapping"],
+                name=k["name"],
+            )
+            if (k := ts.get("knowledge"))
+            else None
+        ),
+        plugins=bool(ts.get("plugins", False)),
+        # 环境配置原样带过去（dict）。工具层收 dict 而不是收 dataclass ——
+        # 这样 `config → tools → config` 不会循环导入，和 ops factory 一个模式。
+        environment=ts.get("environment"),
     )
 
     return AppConfig(
@@ -314,6 +386,19 @@ def _merge_config(base: AppConfig, override: AppConfig) -> AppConfig:
                 by_cap[o.capability] = len(base.toolset.ops) - 1
     if override.toolset.create_pr.enabled or override.toolset.create_pr.verify_command:
         base.toolset.create_pr = override.toolset.create_pr
+
+    # knowledge / plugins / environment 的合并。
+    #
+    # ⚠️ 这三个原来**漏了**（只写了 ops 和 create_pr），表现是：
+    # 项目级 config.local.yaml 里配了 knowledge，运行时却拿不到 ——
+    # 而且不会有任何报错，只是"那一段没生效"。实测撞到过。
+    # 加新字段时记得同步这里。
+    if override.toolset.knowledge is not None:
+        base.toolset.knowledge = override.toolset.knowledge
+    if override.toolset.plugins:
+        base.toolset.plugins = True
+    if override.toolset.environment is not None:
+        base.toolset.environment = override.toolset.environment
 
     return base
 
