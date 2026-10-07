@@ -212,9 +212,6 @@ Agent    → 根因 app/orders.py 的空列表除零
 产物     → runtime-*/delivery/{changes.patch, pr.json, verification.md}
 ```
 
-**这次实测也暴露了一个 mewcode 自身的缺陷**，记在这里以免重复踩：
-`tools/edit_file.py` 用 `Path.write_text()` 写回文件，在 Windows 上会把**整个文件**的
-`\n` 转成 `\r\n`。后果是改一行产生整文件 diff，并且产出的补丁是纯 CRLF，
-`git apply` 打不到 LF 仓库上（实测报 `patch does not apply`；把补丁归一化成 LF 后
-立即成功、验收通过）。修法是读的时候归一化用于匹配、写回时按**原文件的行尾**还原。
-`tools/write_file.py` 大概率是同样的写法。
+**这次实测也暴露了一个 mewcode 自身的缺陷**：Windows 上 `EditFile` 会把整个文件的
+行尾改写成 CRLF，于是产出的补丁打不到 LF 仓库上（把补丁归一化成 LF 后立即成功）。
+现象、复现步骤与修法记在 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) 第 1 条。

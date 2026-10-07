@@ -78,8 +78,8 @@ PR 的 `base` 是基线、`head` 是 agent 分支，永远不可能自己合自�
 ## 快速开始
 
 ```bash
-git clone https://github.com/<你>/<仓库>.git
-cd <仓库名>
+git clone https://github.com/wsxhyit-code/Shipwright.git
+cd Shipwright
 pip install -e .
 
 cp .mewcode/config.yaml.example .mewcode/config.yaml   # 填你的 provider 与 api_key
@@ -103,9 +103,8 @@ pydantic>=2.0       pyyaml>=6.0       rich>=13.0       textual>=2.1.0
 > 但如果你不安装、直接 `python -m mewcode`，那就要求目录名恰好是 `mewcode`
 > （因为源码运行靠的是父目录在 `sys.path` 上）。
 >
-> ⚠️ 打包配置里**刻意没有用 `packages.find`** —— 它会在仓库根扫出
-> `agents` / `tools` 这种顶层包而不是 `mewcode.*`，打出来的 wheel 里文件直接
-> 躺在 site-packages 根目录，`import mewcode` 根本不存在。包清单是显式列出的。
+> 打包上还踩过一个坑（`packages.find` 会打坏 wheel），记在
+> [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md#5-打包为什么-pyprojecttoml-刻意不用-packagesfind)。
 
 ---
 
@@ -155,16 +154,12 @@ toolset:
 分支都推上去之后才发现开不了 PR（"跑到最后一米才失败"是最浪费的失败方式）。
 
 > ⚠️ `GITHUB_TOKEN` **只用于开 PR 的 REST 请求，不用于 `git push`**。
-> 推送走的是 git 自己的凭据体系，所以只设 token 不够：还要配 credential helper，
-> 或把 token 拼进远端 URL / 用 `http.extraheader`。这一点在下面"验证状态"里也提到。
+> 推送走 git 自己的凭据体系，所以只设 token 不够：还要配 credential helper，
+> 或把 token 拼进远端 URL / 用 `http.extraheader`。
 
-### 几条刻意做"严"的校验
-
-| 规则 | 为什么 |
-|---|---|
-| `enabled: true` 却没写 `verify_command` → 启动报错 | 没有验证命令的 CreatePR 等于把铁律拆了，而它看起来还在工作。**静默降级比启动失败危险得多** |
-| `token_env` 读不到 → 启动报错 | 否则会静默发出无认证请求，拿到 401 —— 而 401 在排查时容易被误读成"服务端权限配错了" |
-| 没接的能力调用时抛错，**不返回空** | 返回空会让模型把"没接入"读成"没有异常"，然后非常自信地得出错误结论 |
+几条刻意做"严"的校验（`enabled` 却没写 `verify_command`、`token_env` 读不到、
+能力没接入时报错而不返回空）逐条记在
+[`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md#4-为什么没接入的能力要报错而不是返回空)。
 
 ---
 
@@ -224,15 +219,8 @@ python -m lab.dispatch --execute        # 终端 4：派发给真实 mewcode
 python -m lab.traffic --scenario code   # 终端 5：发 12 次请求触发空订单缺陷
 ```
 
-**完整操作说明、三个场景的触发方式、以及走到真实 PR 的步骤，见
-[`INCIDENT-LAB.md`](INCIDENT-LAB.md)。** 几个要点：
-
-- 演练场默认 `mode: patch`（只出补丁），要真开 PR 需要先把业务代码推到你自己的
-  GitHub 仓库并配好鉴权 —— **不要把实验业务仓库混进 mewcode 源码仓库**。
-- 它验证的是"从真实信号出发能不能自己干完"；**不**验证真实 Loki/Prometheus 的字段差异、
-  真实部署系统、真实 GitHub 服务端那一环（见 `INCIDENT-LAB.md` 第一节的对照表）。
-- Windows 上有两个必须在基线里就修掉的坑（`sqlite3` 连接不关闭、`core.autocrlf`
-  破坏按字节校验的完整性清单），仓库里的副本已经带修复，详见 `INCIDENT-LAB.md` 第三节。
+**完整操作说明、三个场景（代码缺陷 / 配置错误 / 依赖故障）的触发方式、
+以及走到真实 PR 的步骤，见 [`INCIDENT-LAB.md`](INCIDENT-LAB.md)。**
 
 ---
 
@@ -255,18 +243,8 @@ python -m lab.traffic --scenario code   # 终端 5：发 12 次请求触发空�
   ✅ 代码目录可写 / 产物出口可写        ✅ 连不上公网 / DNS 解析不了外网
 ```
 
-> **容器模式才是"agent 连不上远端"的物理保证**：没有网络出口、没有 git 凭据、
-> 没有宿主 home。本地 TUI 模式没有这层隔离，所以护栏必须在代码里（见开头那三条）。
-
-### 「起测试环境」分三层，只有两层该给 agent
-
-| 层 | 例子 | 谁做 | 为什么 |
-|---|---|---|---|
-| **依赖服务** | PostgreSQL / Redis / mock | **平台预先起好** | 起容器要 docker 权限 → 给了就破沙箱 |
-| **项目依赖** | `pip install -r requirements.txt` | ✅ agent | 每个项目不同，且随代码变 |
-| **测试数据** | `alembic upgrade head` | ✅ agent | 跟着数据模型走 |
-
-**平台造环境，agent 用环境**：连接串通过环境变量注入，agent 只能"连"不能"起"。
+"起测试环境"分三层，只有两层该给 agent（依赖服务由平台预先起好、项目依赖与测试数据给
+agent）—— 理由见 [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md#6-沙箱为什么是不给而不是禁止)。
 
 ---
 
@@ -275,7 +253,7 @@ python -m lab.traffic --scenario code   # 终端 5：发 12 次请求触发空�
 接了 Loki / Prometheus / Alertmanager 之后，它能走完一条完整链路：
 
 ```
-告警说 5xx 涨了  →  日志聚类指向 OrderService.java:142 的 NPE
+告警说 5xx 涨了  →  日志聚类指向某个具体位置
                  →  指标显示**只有 pod-3 异常**
                  →  部署记录显示 pod-3 在 12 分钟前更新过
                  →  去看这次发布的代码改动（用 coding 工具）
@@ -326,71 +304,30 @@ python -m pytest              # 默认沙箱下会有若干 skip（推送/开 PR
 python -m pytest -m llm       # 真实 LLM 测试（要 API key，约 8 分钟）
 ```
 
-> 跳过的是"本环境做不到"的断言（例如沙箱里 `git push` 跑不起来），
-> 它们是**如实 skip 而不是假装通过** —— 见 `docs/devops-agent/README.md` 里那段自我更正。
-
 ---
 
-## 验证状态（诚实说明）
+## 验证结论
 
-**已端到端实测：**
+**已端到端实测**（完整记录与逐条验法见 [`docs/VERIFICATION.md`](docs/VERIFICATION.md)）：
 
-| 项 | 怎么验的 |
+- ★ **独立验证者能抓到植入的 bug**：真实 LLM 测试里判 FAIL，且理由**点到了具体符号**（`None` / 判空 / `KeyError`）；反向用例判 PASS —— 它有区分能力，不是"永远 FAIL"
+- ★ **验证者物理上改不了文件**：只读注册表 + `plan` 模式
+- **门禁拦得住没改好的代码**：代码没修 → 被拒 → **不产出补丁**；且"验证先于交付"的顺序有测试钉住
+- ★ **交付链路整条走通**（对着**本地假 GitHub API**）：真 push 到远端 + 真发 `POST /repos/{owner}/{name}/pulls`，**URL / 认证头 / payload 全部核对**；`main` 未被碰
+- ★ **本地故障演练场**：12 次真实请求 → 8 个 500 → 滑窗告警分类为代码故障 → **真实 agent 自己定位到 `app/orders.py` 的空列表除零并改对** → 验收通过 → `CreatePR` 命令验证 exit 0 + 独立验证 PASS → 产出补丁
+- **沙箱三条铁律**：真实运行标志 + 真实网络实测，自检 14/14
+
+**边界与已知问题**（不在这里展开，点链接）：
+
+| 主题 | 内容 |
 |---|---|
-| ★ **独立验证者能抓到埋进去的 bug** | **真实 LLM**（`pytest -m llm`）：植入"缺判空"的 bug → 判 FAIL，且**理由里点到了 `None` / 判空 / `KeyError`** —— 证明它真读懂了代码，不是碰巧 |
-| ★ **验证者有区分能力** | 反向用例：实现正确时判 PASS —— 一个永远 FAIL 的验证者和不存在一样没用，还会堵死流程 |
-| 验证者物理上改不了文件 | 只读注册表 + `plan` 模式，真实模型也改不动 |
-| 验证门禁拦得住没改好的代码 | `demo_full_pipeline.py`：代码没修 → 被拒 → **不产出补丁** |
-| 补丁应用 / 独立重跑 / 推送 / 开 PR | 同上的 demo 与 `tests/test_autonomous_delivery.py`，exit 0 |
-| 真实 `git push` | 推到真实 bare 远端，`agent/*` 出现、`main` 未被碰 |
-| 开 PR 的 HTTP 请求 | `--api-base` 指向本地假 GitHub API，真发 POST，路径/认证头/payload 全验证 |
-| 沙箱三条铁律 | 真实运行标志 + 真实网络：容器能连内网服务、连不上公网；自检 14/14 |
-| ★ **对着真 GitHub 开过 PR** | 真跑一次完整流程：补丁 → `git apply` → 独立重跑 → 建 `agent/*` 分支 → **真 push** → **真调 `api.github.com` 开 PR**。核实结果：PR 状态 `open`、`head=agent/...`、`base=main`，且**基线 `main` 仍是最初那一个 commit，一动没动** |
-| ★ **本地故障演练场：告警 → 定位 → 修复 → 门禁 → 补丁** | `mewcode-incident-lab/` 真实运行：12 次真实请求打出 8 个 500 → 滑窗告警分类为代码故障 → 派给真实 agent → 它自己查到 `app/orders.py` 空列表除零、改对、跑通验收 → `CreatePR` 命令验证 exit 0 + 独立验证 PASS → 产出补丁。详见 `INCIDENT-LAB.md` 第七节 |
-| **仓库可安装** | 构建 wheel → 解开 → `import mewcode` + 关键子模块 + `styles.tcss` + 内置 skill 全部正常 |
+| 未验证范围 | 对着**真 GitHub 服务端**开 PR 需要凭据、容器镜像未实际构建、真实 Loki/Prometheus 未对实例验字段名 → [`docs/VERIFICATION.md`](docs/VERIFICATION.md) |
+| 已知缺陷 | 含 Windows 下 `EditFile` 会改写整个文件行尾、子 agent 权限取默认值会静默失败 → [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
+| 设计取舍 | 为什么允许 agent 自己推送、为什么只信退出码、为什么"没接入"要报错，以及"断言声明 ≠ 断言效果"的几次翻车 → [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) |
 
-**未验证 / 有边界：**
-
-| 项 | 说明 |
-|---|---|
-| **本机的 GitHub 鉴权** | 想复现"对着真 GitHub 开 PR"这一条，本机需要先备齐：目标仓库的 `origin`、git 推送凭据（`gh` 登录或 credential helper）、以及 `GITHUB_TOKEN`。**当前这台开发机上三者都没有**（实测 `gh` 不存在、credential helper 为空、无 token 环境变量），所以这一条只能在配好凭据的机器上复现；本机跑 `mode: pr` 会在**启动时**被配置校验直接拒掉 |
-| **容器镜像实际构建** | 构建容器的出网环境受限（实测 `deb.debian.org` / 阿里云镜像都不可达），镜像未建出来。运行时边界已单独验证 |
-| **真实 Loki / Prometheus 实例** | 单测用 `httpx.MockTransport`（验证请求构造与解析），demo 真起 HTTP 服务 —— 但那是本地假实现。**接生产前必须对真实例验一次字段名**（各家 `stream` 标签、`severity` 取值可能不一样） |
-| **部署 / 工单后端** | 没有通用标准，需要自己写适配器接 ArgoCD / Jenkins / Jira。接口就 8 个方法 |
-| **Windows 下 `EditFile` 会改写整个文件的行尾** | 工具用 `Path.write_text()` 写回，Windows 上把 `\n` 转成 `\r\n`：改一行产生整文件 diff，且产出的补丁是纯 CRLF，`git apply` 打不到 LF 仓库上。实测把补丁归一化成 LF 后立即成功。修法是读时归一化用于匹配、写回时按原文件行尾还原；`tools/write_file.py` 大概率同病 |
-
-### 想真验一次"对着真 GitHub 开 PR"
-
-```bash
-# 1. 备齐三样：远端 / git 推送凭据 / 开 PR 的 token
-git remote add origin https://github.com/<你>/<仓库>.git
-export GITHUB_TOKEN=ghp_xxx                     # 需要 repo 权限（仅用于开 PR 的 REST 调用）
-
-# 2. 确定性收尾脚本（它自己会 git apply、独立重跑、推分支、开 PR）
-python ci/apply_and_open_pr.py --repo . --artifacts .mewcode/pr \
-    --verify-cmd "python -m pytest tests/ -q" --base main
-```
-
----
-
-## 一次设计更正：为什么允许 agent 自己推送
-
-最早的设计是「AI 只产出补丁、**永不推送**」，靠一个 hook 拦 `git push`。
-实测那个 hook：
-
-| 命令 | 结果 |
-|---|---|
-| `git push` / `bash -c "git push"` / `/usr/bin/git push` / `cd x && git push` | 拦住 |
-| **`git -C . push`** | **放行 ← 绕过** |
-| **`git -c core.pager=cat push`** | **放行 ← 绕过** |
-| **`python -c "subprocess.run(['git','push'])"`** | **放行 ← 绕过** |
-| **`git\ push`** / **`$(which git) push`** | **放行 ← 绕过** |
-
-5 / 9 种写法能绕过，而 `git -C <目录> push` 恰恰是 agent 最常用的写法 ——
-所以"AI 永不推送"实际是一个**可绕过的正则**，不是保证。
-
-与其用它假装拦住，不如明确允许推送，把真正承重的三条守住（就是开头那三条）。
-**把"AI 只能产出补丁"当成铁律，是把实现手段当成了目的。**
+> 默认沙箱下 `pytest` 的若干 **skip** 是"本环境做不到"的断言（例如这里 `git push`
+> 建不了具名管道），**如实 skip 而不是假装通过** —— 理由与控制组做法见
+> [`docs/VERIFICATION.md`](docs/VERIFICATION.md)。
 
 ---
 
