@@ -4,6 +4,26 @@
 
 跟"让模型自由发挥"的区别在于：**边界是机械钉死的，不是靠提示词祈祷的。**
 
+![Shipwright 架构与交付模式](assets/shipwright-architecture.webp)
+
+---
+
+## 能力一览
+
+| 能力 | 内容 |
+|---|---|
+| **运行形态** | 交互 TUI（`python -m mewcode`）、单次执行（`-p "任务"`）、容器内、CI 收尾 |
+| **工具（38 个）** | 基础 6（读/写/改/执行/搜索）；子 agent 与团队 5；任务板 4；工作树 2；技能 2；运维 9；知识库 3；测试环境 4；交付 1 |
+| **斜杠命令（14 个）** | `/help` `/compact` `/clear` `/plan` `/session` `/mcp` `/memory` `/permission` `/rewind` `/status` `/skill` `/tasks` `/trace` `/worktree` |
+| **权限** | 6 种模式 × read/write/command 三分类，5 层检查（Plan 例外 → 路径沙箱 → 只读白名单 → 危险命令黑名单 → 规则引擎 → 模式兜底 → 人工确认） |
+| **子 agent** | 从 `.md` 定义加载、fork 继承上下文、4 层工具过滤、后台任务、追踪树 |
+| **团队模式** | `in-process` / `tmux` / `iterm2` 三种后端，邮箱 + 共享任务 + 每人一个 worktree |
+| **记忆** | 用户级 `~/.mewcode/memories.md` + 项目级 `.mewcode/memories.md`，自动提取 + 相关性召回 |
+| **上下文管理** | 大工具结果落盘、自动压缩（带断路器）、压缩后恢复附件 |
+| **技能** | `SKILL.md`（inline/fork、allowedTools、references 里可挂自定义工具），自动变成 `/命令` |
+| **扩展接入** | MCP 客户端、插件 entry point、Hooks（15 个事件 × 4 种动作） |
+| **交付** | `CreatePR` 三种模式 + 结构性分支护栏 + 独立验证者 + 零 AI 的 CI 收尾 |
+
 ---
 
 ## 三道机械护栏
@@ -134,6 +154,10 @@ toolset:
 配置校验会在**启动时**报错 —— 不这么做的话，agent 会改完代码、两层验证都通过、
 分支都推上去之后才发现开不了 PR（"跑到最后一米才失败"是最浪费的失败方式）。
 
+> ⚠️ `GITHUB_TOKEN` **只用于开 PR 的 REST 请求，不用于 `git push`**。
+> 推送走的是 git 自己的凭据体系，所以只设 token 不够：还要配 credential helper，
+> 或把 token 拼进远端 URL / 用 `http.extraheader`。这一点在下面"验证状态"里也提到。
+
 ### 几条刻意做"严"的校验
 
 | 规则 | 为什么 |
@@ -177,6 +201,38 @@ toolset:
     ├─ git push -u origin <branch>
     └─ 开 PR（gh 或 REST API）
 ```
+
+---
+
+## 本地故障演练场：验证"从告警到 PR"的整条链路
+
+上面那条链路需要真实环境才能跑。**`mewcode-incident-lab/` 把它搬到了本机**：
+一个真实运行的订单服务，故障是预先埋进去的，HTTP 请求、异常堆栈、请求日志、
+滑动窗口告警全部由实际运行产生；监控把代码类故障派给真实 `python -m mewcode -p`。
+
+![故障驱动修复闭环](assets/incident-lab-loop.png)
+
+```bash
+pip install -e .                        # 装 mewcode 本体
+cd mewcode-incident-lab
+python -m lab.init                      # 建 runtime 与订单数据
+python -m lab.configure --mode patch    # 生成 toolset 覆盖层 + 收窄后的权限规则
+python -m app.service                   # 终端 1：订单服务
+python -m lab.monitor                   # 终端 2：滑窗检测与分类
+python -m lab.evidence                  # 终端 3：给运维工具提供本地 HTTP 数据
+python -m lab.dispatch --execute        # 终端 4：派发给真实 mewcode
+python -m lab.traffic --scenario code   # 终端 5：发 12 次请求触发空订单缺陷
+```
+
+**完整操作说明、三个场景的触发方式、以及走到真实 PR 的步骤，见
+[`INCIDENT-LAB.md`](INCIDENT-LAB.md)。** 几个要点：
+
+- 演练场默认 `mode: patch`（只出补丁），要真开 PR 需要先把业务代码推到你自己的
+  GitHub 仓库并配好鉴权 —— **不要把实验业务仓库混进 mewcode 源码仓库**。
+- 它验证的是"从真实信号出发能不能自己干完"；**不**验证真实 Loki/Prometheus 的字段差异、
+  真实部署系统、真实 GitHub 服务端那一环（见 `INCIDENT-LAB.md` 第一节的对照表）。
+- Windows 上有两个必须在基线里就修掉的坑（`sqlite3` 连接不关闭、`core.autocrlf`
+  破坏按字节校验的完整性清单），仓库里的副本已经带修复，详见 `INCIDENT-LAB.md` 第三节。
 
 ---
 
@@ -239,32 +295,39 @@ toolset:
 __main__.py  app.py            入口（TUI 与 -p 两条装配路径）
 agent.py                        ReAct 主循环
 client.py                       Anthropic / OpenAI / OpenAI-compat 三个客户端
-context/manager.py              两层压缩（大工具结果落盘 + 摘要）
+context/manager.py              两层压缩（大工具结果落盘 + 摘要 + 断路器）
 
 tools/                          内置工具 + 扩展工具
   create_pr.py                  CreatePR 门禁（三种交付模式）
   agent_verify.py               独立验证子 agent
   ops/                          9 个运维工具
     backends/                   Loki / Prometheus / Alertmanager 真实实现 + 工厂
+  environment/  knowledge/      测试环境编排 / 企业知识库（各自可插拔后端）
 delivery.py                     提交 / 推 agent/* / 开 PR（agent 与 CI 共用）
 toolset.py                      配置 → 工具装配
 permissions/                    Layer 0-5 权限检查 + PathSandbox
-hooks/                          事件钩子
-skills/  memory/  sessions/     Skill / 记忆 / 会话（JSONL 持久化，无数据库）
+hooks/                          事件钩子（15 个事件 × 4 种动作）
+skills/  memory/                Skill 系统 / 记忆与会话（JSONL 持久化，无数据库）
 mcpclient/                      MCP 客户端
+commands/                       斜杠命令注册表与处理器
 
 docker/                         容器沙箱（三条铁律）
 ci/                             确定性收尾流水线（无 AI）
 docs/devops-agent/              说明 + 可跑 demo
-tests/                          357 条（默认）/ 378 条（含真实推送）+ 7 条真实 LLM
+mewcode-incident-lab/           本地故障演练场（见 INCIDENT-LAB.md）
+assets/                         README 用图
+tests/                          单元与端到端测试
 ```
 
 ### 跑测试
 
 ```bash
-python -m pytest              # 357 passed, 22 skipped（默认）
-python -m pytest -m llm       # 7 条真实 LLM 测试（要 API key，约 8 分钟）
+python -m pytest              # 默认沙箱下会有若干 skip（推送/开 PR 相关）
+python -m pytest -m llm       # 真实 LLM 测试（要 API key，约 8 分钟）
 ```
+
+> 跳过的是"本环境做不到"的断言（例如沙箱里 `git push` 跑不起来），
+> 它们是**如实 skip 而不是假装通过** —— 见 `docs/devops-agent/README.md` 里那段自我更正。
 
 ---
 
@@ -283,20 +346,27 @@ python -m pytest -m llm       # 7 条真实 LLM 测试（要 API key，约 8 分
 | 开 PR 的 HTTP 请求 | `--api-base` 指向本地假 GitHub API，真发 POST，路径/认证头/payload 全验证 |
 | 沙箱三条铁律 | 真实运行标志 + 真实网络：容器能连内网服务、连不上公网；自检 14/14 |
 | ★ **对着真 GitHub 开过 PR** | 真跑一次完整流程：补丁 → `git apply` → 独立重跑 → 建 `agent/*` 分支 → **真 push** → **真调 `api.github.com` 开 PR**。核实结果：PR 状态 `open`、`head=agent/...`、`base=main`，且**基线 `main` 仍是最初那一个 commit，一动没动** |
+| ★ **本地故障演练场：告警 → 定位 → 修复 → 门禁 → 补丁** | `mewcode-incident-lab/` 真实运行：12 次真实请求打出 8 个 500 → 滑窗告警分类为代码故障 → 派给真实 agent → 它自己查到 `app/orders.py` 空列表除零、改对、跑通验收 → `CreatePR` 命令验证 exit 0 + 独立验证 PASS → 产出补丁。详见 `INCIDENT-LAB.md` 第七节 |
 | **仓库可安装** | 构建 wheel → 解开 → `import mewcode` + 关键子模块 + `styles.tcss` + 内置 skill 全部正常 |
 
 **未验证 / 有边界：**
 
 | 项 | 说明 |
 |---|---|
+| **本机的 GitHub 鉴权** | 想复现"对着真 GitHub 开 PR"这一条，本机需要先备齐：目标仓库的 `origin`、git 推送凭据（`gh` 登录或 credential helper）、以及 `GITHUB_TOKEN`。**当前这台开发机上三者都没有**（实测 `gh` 不存在、credential helper 为空、无 token 环境变量），所以这一条只能在配好凭据的机器上复现；本机跑 `mode: pr` 会在**启动时**被配置校验直接拒掉 |
 | **容器镜像实际构建** | 构建容器的出网环境受限（实测 `deb.debian.org` / 阿里云镜像都不可达），镜像未建出来。运行时边界已单独验证 |
 | **真实 Loki / Prometheus 实例** | 单测用 `httpx.MockTransport`（验证请求构造与解析），demo 真起 HTTP 服务 —— 但那是本地假实现。**接生产前必须对真实例验一次字段名**（各家 `stream` 标签、`severity` 取值可能不一样） |
 | **部署 / 工单后端** | 没有通用标准，需要自己写适配器接 ArgoCD / Jenkins / Jira。接口就 8 个方法 |
+| **Windows 下 `EditFile` 会改写整个文件的行尾** | 工具用 `Path.write_text()` 写回，Windows 上把 `\n` 转成 `\r\n`：改一行产生整文件 diff，且产出的补丁是纯 CRLF，`git apply` 打不到 LF 仓库上。实测把补丁归一化成 LF 后立即成功。修法是读时归一化用于匹配、写回时按原文件行尾还原；`tools/write_file.py` 大概率同病 |
 
 ### 想真验一次"对着真 GitHub 开 PR"
 
 ```bash
-export GITHUB_TOKEN=ghp_xxx          # 需要 repo 权限
+# 1. 备齐三样：远端 / git 推送凭据 / 开 PR 的 token
+git remote add origin https://github.com/<你>/<仓库>.git
+export GITHUB_TOKEN=ghp_xxx                     # 需要 repo 权限（仅用于开 PR 的 REST 调用）
+
+# 2. 确定性收尾脚本（它自己会 git apply、独立重跑、推分支、开 PR）
 python ci/apply_and_open_pr.py --repo . --artifacts .mewcode/pr \
     --verify-cmd "python -m pytest tests/ -q" --base main
 ```

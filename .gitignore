@@ -61,10 +61,14 @@ env/
 # 评测夹具的临时产物
 #
 #  · eval/shipwright-triage/.verify-work/ —— 独立验证时从基线导出的干净副本
-#    （每次重跑都会重建，不需要进仓库）
+#  · eval/shipwright-triage/lab-run/     —— 跑演练场时各子进程的日志与验收副本
 #  · run1.log —— 那次「告警 → 定位 → 提 PR」跑下来的完整轨迹
+#  这些每次重跑都会重建，不需要进仓库。
 # ---------------------------------------------------------------------------
 eval/shipwright-triage/.verify-work/
+eval/shipwright-triage/.work/
+eval/shipwright-triage/.pr-sandbox/
+eval/shipwright-triage/lab-run/
 eval/shipwright-triage/*.log
 eval/**/__pycache__/
 

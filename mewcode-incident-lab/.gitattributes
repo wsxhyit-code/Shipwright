@@ -1,0 +1,10 @@
+# 这个实验里有"按字节比对哈希"的固定件（acceptance/integrity.json 记录
+# acceptance/test_regression.py 与 docs/API_CONTRACT.md 的 sha256）。
+#
+# 任何换行符转换都会改变字节 → 完整性关卡报 "Fixed evaluator or contract was
+# changed" → 验收永远 FAIL。实测：Windows 上 git 的 core.autocrlf=true 会让
+# **新 clone/checkout** 把这些文件转成 CRLF，而仓库里存的是 LF，
+# 于是同一个人 clone 两次、或换台机器，验收结果就不一样。
+#
+# 所以这里对所有文件**禁用**自动转换：提交的是什么字节，检出就是什么字节。
+* -text

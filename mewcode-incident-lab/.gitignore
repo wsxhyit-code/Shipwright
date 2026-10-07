@@ -1,0 +1,11 @@
+runtime/
+runtime-*/
+.mewcode/config*.yaml
+.mewcode/permissions.local.yaml
+.mewcode/pr/
+.mewcode/debug.log
+.mewcode/session/
+.mewcode/sessions/
+__pycache__/
+*.pyc
+.venv/

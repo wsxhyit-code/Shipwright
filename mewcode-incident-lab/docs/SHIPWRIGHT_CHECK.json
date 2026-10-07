@@ -1,0 +1,29 @@
+{
+  "scope": "actual Shipwright HTTP adapters/toolset/CreatePR; real local logs",
+  "llm_executed": false,
+  "github_pr_created": false,
+  "registered_tools": [
+    "ListAlerts",
+    "GetAlert",
+    "QueryLogs",
+    "GetLogSample",
+    "QueryMetrics",
+    "ListDeploys",
+    "GetServiceHealth",
+    "BuildTimeline",
+    "CreateIncident",
+    "CreatePR"
+  ],
+  "real_tools": {
+    "ListAlerts": "当前告警（1 条，按严重程度）\n  [critical] incident-e5702eb1b350c869-1791378052096  order-service  13:00\n        incident-e5702eb1b350c869-1791378052096 — HTTP 5xx rate 100.0%; Application stack available; reproduction and contract confirmation are still required",
+    "QueryLogs": "order-service 日志聚类（最近 15m，ERROR，共 12 条 / 1 类）\n\n  [C-15c83c] <L> ZeroDivisionError orders.py:<N> in summarize code=APPLICATION_EXCEPTION endpoint=<PATH> status=<N> request_id=<HEX> revision=unversioned\n      12 条（100%）  首次 13:00:51  最后 13:00:51\n      样例：2026-10-07T13:00:51.595584+00:00 ERROR ZeroDivisionError orders.py:8 in summarize code=APPLICATION_EXCEPTION e\n\n提示：要定位根因，用 GetLogSample 拉某个聚类的完整堆栈；\n      再用 ListDeploys 看这个时间点前后有没有发布。",
+    "GetLogSample": "聚类 C-15c83c 原始日志（3 行）\n2026-10-07T13:00:51.595584+00:00 ERROR ZeroDivisionError orders.py:8 in summarize code=APPLICATION_EXCEPTION endpoint=/api/orders/summary status=500 request_id=7a0e18b8139e4c03885ce952a75e5283 revision=unversioned query={\"customer_id\": [\"1002\"]}\n2026-10-07T13:00:51.594472+00:00 ERROR ZeroDivisionError orders.py:8 in summarize code=APPLICATION_EXCEPTION endpoint=/api/orders/summary status=500 request_id=0b3b22fc0d1f4c9fbb435b69bc7c5d05 revision=unversioned query={\"customer_id\": [\"1002\"]}\n2026-10-07T13:00:51.593078+00:00 ERROR ZeroDivisionError orders.py:8 in summarize code=APPLICATION_EXCEPTION endpoint=/api/orders/summary status=500 request_id=5540652e42024065b534121cbc790818 revision=unversioned query={\"customer_id\": [\"1002\"]}",
+    "QueryMetrics": "http_5xx_rate（最近 1m，按 endpoint 分组）\n\n  /api/orders/summary 100 → 100   → +0.0%"
+  },
+  "scoped_permissions_checked": true,
+  "create_pr_before_repair": "❌ 提 PR 被拒：验证未通过\n\n验证命令：\"/workspace/scratch/d4a06a90f2c3/shipwright-env/bin/python\" -m lab.verify\n退出码：1\n耗时：0.7s\n\n输出（尾部 2000 字符）：\n{\"mechanical_verification\": \"FAIL\", \"independent_agent_verification\": \"NOT_RUN\"}\n\n\n请先修复上述问题，再重新调用 CreatePR。",
+  "create_pr_without_independent_verifier": "❌ 提 PR 被拒：本环境要求独立验证，但没有配置验证者。\n请用 `make_subagent_verifier(parent_agent)` 造一个并传给 `CreatePRTool(verifier_runner=...)`。",
+  "config_schema_checked": true,
+  "permission_rules_count": 29,
+  "qa_status": "PASS"
+}

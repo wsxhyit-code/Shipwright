@@ -1,0 +1,79 @@
+{
+  "scope": "real local HTTP + mechanical gates + QA reference repair",
+  "agent_executed": false,
+  "github_pr_created": false,
+  "code": {
+    "health": 200,
+    "http_statuses": [
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500,
+      500
+    ],
+    "classification": "application_candidate",
+    "code_fix_candidate": true
+  },
+  "configuration": {
+    "health": 200,
+    "http_statuses": [
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503
+    ],
+    "classification": "configuration",
+    "code_fix_candidate": false
+  },
+  "dependency": {
+    "health": 200,
+    "http_statuses": [
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503,
+      503
+    ],
+    "classification": "dependency_or_network",
+    "code_fix_candidate": false
+  },
+  "baseline_existing_tests": {
+    "exit_code": 0,
+    "output": "test_normal_customer (test_orders.ExistingTests.test_normal_customer) ... ok\ntest_single_order (test_orders.ExistingTests.test_single_order) ... ok\ntest_zero_value_order (test_orders.ExistingTests.test_zero_value_order) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.000s\n\nOK\n"
+  },
+  "before_repair_verification": {
+    "exit_code": 1,
+    "output": "{\"mechanical_verification\": \"FAIL\", \"independent_agent_verification\": \"NOT_RUN\"}\n"
+  },
+  "reference_repair_verification": {
+    "exit_code": 0,
+    "output": "{\"mechanical_verification\": \"PASS\", \"independent_agent_verification\": \"NOT_RUN\"}\n"
+  },
+  "detector_tests": {
+    "exit_code": 0,
+    "output": "test_classification_not_only_status_code (test_detector.DetectorTests.test_classification_not_only_status_code) ... ok\ntest_expired_errors_do_not_fire (test_detector.DetectorTests.test_expired_errors_do_not_fire) ... ok\ntest_hold_and_dedup (test_detector.DetectorTests.test_hold_and_dedup) ... ok\ntest_mixed_evidence_is_unknown (test_detector.DetectorTests.test_mixed_evidence_is_unknown) ... ok\ntest_new_deployment_success_resolves_old_alert (test_detector.DetectorTests.test_new_deployment_success_resolves_old_alert) ... ok\ntest_no_traffic_is_not_recovery (test_detector.DetectorTests.test_no_traffic_is_not_recovery) ... ok\ntest_normal_and_client_errors_do_not_fire (test_detector.DetectorTests.test_normal_and_client_errors_do_not_fire) ... ok\ntest_rate_threshold (test_detector.DetectorTests.test_rate_threshold) ... ok\ntest_request_grouping (test_detector.DetectorTests.test_request_grouping) ... ok\ntest_small_sample_does_not_fire (test_detector.DetectorTests.test_small_sample_does_not_fire) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 0.001s\n\nOK\n"
+  },
+  "qa_status": "PASS"
+}
